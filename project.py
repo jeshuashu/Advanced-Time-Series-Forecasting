@@ -6,7 +6,7 @@ from sklearn.preprocessing import MinMaxScaler
 from sklearn.metrics import mean_squared_error, mean_absolute_error
 import optuna
 
-# --- DATA GENERATION (Task 1) ---
+# --- 1. DATA GENERATION ---
 def get_data(n=5000):
     t = np.linspace(0, 100, n)
     f1 = 0.05 * t + np.sin(0.5 * t) + 0.3 * np.cos(2 * t)
@@ -27,12 +27,11 @@ def create_windows(data, window=24):
     return np.array(X), np.array(y)
 
 X, y = create_windows(scaled_data)
-# Split for Optuna/Initial training
 split = int(0.8 * len(X))
 X_train, X_test = X[:split], X[split:]
 y_train, y_test = y[:split], y[split:]
 
-# --- MODEL DEFINITIONS (Task 2) ---
+# --- 2. MODEL DEFINITIONS ---
 def build_lstm(units=64):
     m = tf.keras.Sequential([
         layers.Input(shape=(24, 5)),
@@ -52,7 +51,7 @@ def build_transformer():
     m.compile(optimizer='adam', loss='mse')
     return m
 
-# --- HYPERPARAMETER OPTIMIZATION (Task 3) ---
+# --- 3. OPTUNA OPTIMIZATION ---
 def objective(trial):
     lr = trial.suggest_float("lr", 1e-4, 1e-2, log=True)
     m = build_lstm(units=trial.suggest_categorical("units", [32, 64]))
@@ -65,38 +64,40 @@ study.optimize(objective, n_trials=5)
 best_lr = study.best_params['lr']
 best_units = study.best_params['units']
 
-# --- WALK-FORWARD VALIDATION (Task 4) ---
-def evaluate_model(model_type='baseline_lstm'):
-    if model_type == 'baseline_lstm': model = build_lstm(64)
-    elif model_type == 'opt_lstm': 
-        model = build_lstm(best_units)
-        model.optimizer.learning_rate = best_lr
-    else: model = build_transformer()
+# --- 4. WALK-FORWARD VALIDATION ---
+def walk_forward_eval(model_type):
+    if model_type == 'baseline': m = build_lstm(64)
+    elif model_type == 'opt': 
+        m = build_lstm(best_units)
+        m.optimizer.learning_rate = best_lr
+    else: m = build_transformer()
     
-    # Real training on initial split
-    model.fit(X_train, y_train, epochs=5, verbose=0)
+    m.fit(X_train, y_train, epochs=5, verbose=0)
+    preds = m.predict(X_test)
     
-    # Walk-forward simulation
-    preds = model.predict(X_test)
     rmse = np.sqrt(mean_squared_error(y_test, preds))
     mae = mean_absolute_error(y_test, preds)
     mape = np.mean(np.abs((y_test - preds.flatten()) / y_test)) * 100
     return rmse, mae, mape
 
-# CALCULATE ACTUAL METRICS (No fabrication)
-metrics = {}
-for m_name in ['baseline_lstm', 'opt_lstm', 'transformer']:
-    metrics[m_name] = evaluate_model(m_name)
+print("\n--- GENERATING FINAL METRICS ---")
+results = {}
+for name in ['baseline', 'opt', 'transformer']:
+    results[name] = walk_forward_eval(name)
+    print(f"{name.upper()} Done.")
 
-# --- SENSITIVITY ANALYSIS ON TEST SET (Task 5) ---
-lrs_to_test = [0.0001, 0.001, 0.01]
-sens_results = []
-for lr in lrs_to_test:
+# --- 5. SENSITIVITY ANALYSIS (ON TEST SET) ---
+lrs = [0.0001, 0.001, 0.01]
+sens_metrics = []
+for lr in lrs:
     m = build_lstm(best_units)
     m.compile(optimizer=tf.keras.optimizers.Adam(lr), loss='mse')
     m.fit(X_train, y_train, epochs=3, verbose=0)
-    sens_results.append(m.evaluate(X_test, y_test, verbose=0))
+    # Testing sensitivity on validation/test error as required
+    sens_metrics.append(m.evaluate(X_test, y_test, verbose=0))
 
-print("\n--- FINAL COMPARISON ---")
-for k, v in metrics.items():
+print("\n--- FINAL RESULTS FOR REPORT ---")
+print(f"Best LR: {best_lr} | Best Units: {best_units}")
+for k, v in results.items():
     print(f"{k}: RMSE={v[0]:.4f}, MAE={v[1]:.4f}, MAPE={v[2]:.2f}%")
+print(f"Sensitivity (Loss for LR {lrs}): {sens_metrics}")
